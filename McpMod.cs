@@ -416,6 +416,20 @@ public static partial class McpMod
         string action = actionElem.GetString() ?? "";
 
         // Handle menu actions separately (no run required)
+        if (action == "save_and_quit_to_menu")
+        {
+            try
+            {
+                var result = ExecuteSaveAndQuitToMenuAsync().GetAwaiter().GetResult();
+                SendJson(response, result);
+            }
+            catch (Exception ex)
+            {
+                SendError(response, 500, $"Save and quit failed: {ex.Message}");
+            }
+            return;
+        }
+
         if (action == "menu_select")
         {
             try

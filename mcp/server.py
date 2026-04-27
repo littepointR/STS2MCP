@@ -121,6 +121,34 @@ async def _wait_for_profile(profile_id: int, fallback: str) -> str:
     )
 
 
+def _json_response(status: str, **values: object) -> str:
+    response = {"status": status, **values}
+    return json.dumps(response, indent=2)
+
+
+def _parse_json_response(text: str) -> dict:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {"status": "error", "error": "Response was not JSON", "raw_response": text}
+    return parsed if isinstance(parsed, dict) else {"status": "error", "error": "Response was not an object", "raw_response": parsed}
+
+
+def _option_names(state: dict) -> set[str]:
+    options = state.get("options", [])
+    names: set[str] = set()
+    if isinstance(options, list):
+        for option in options:
+            if isinstance(option, str):
+                names.add(option.lower())
+            elif isinstance(option, dict):
+                name = option.get("name")
+                enabled = option.get("enabled", True)
+                if isinstance(name, str) and enabled is not False:
+                    names.add(name.lower())
+    return names
+
+
 def _handle_error(e: Exception) -> str:
     if isinstance(e, httpx.ConnectError):
         return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
@@ -238,17 +266,61 @@ async def switch_profile(profile_id: int) -> str:
 
 
 @mcp.tool()
-async def delete_profile(profile_id: int) -> str:
-    """Delete an inactive profile slot.
-
-    The active profile cannot be deleted through this tool. Switch away first if
-    you intend to remove a slot after backing up any data you need.
-
-    Args:
-        profile_id: Profile slot to delete. Must be 1, 2, or 3.
-    """
+async def sl() -> str:
+    """[Run Control] Save and quit to the main menu, continue the run, and wait until the run is loaded again."""
     try:
-        return await _profiles_post({"action": "delete", "profile_id": profile_id})
+        save_result_text = await _post({"action": "save_and_quit_to_menu"})
+        save_result = _parse_json_response(save_result_text)
+        if save_result.get("status") == "error":
+            return save_result_text
+
+        last_state: dict | None = None
+        for _ in range(100):
+            state = _parse_json_response(await _get({"format": "json"}))
+            last_state = state
+            if state.get("state_type") == "menu":
+                if "continue" not in _option_names(state):
+                    return _json_response(
+                        "error",
+                        error="Reached menu, but continue is not available",
+                        state=state,
+                        save_result=save_result,
+                    )
+                break
+            await asyncio.sleep(0.1)
+        else:
+            return _json_response(
+                "error",
+                error="Timed out waiting for main menu after save and quit",
+                last_state=last_state,
+                save_result=save_result,
+            )
+
+        continue_result_text = await menu_select("continue")
+        continue_result = _parse_json_response(continue_result_text)
+        if continue_result.get("status") == "error":
+            return continue_result_text
+
+        for _ in range(150):
+            state = _parse_json_response(await _get({"format": "json"}))
+            last_state = state
+            if state.get("state_type") != "menu":
+                return _json_response(
+                    "ok",
+                    message="Saved and continued the run",
+                    save_result=save_result,
+                    continue_result=continue_result,
+                    state=state,
+                )
+            await asyncio.sleep(0.1)
+
+        return _json_response(
+            "error",
+            error="Timed out waiting for the run to load after continue",
+            last_state=last_state,
+            save_result=save_result,
+            continue_result=continue_result,
+        )
     except Exception as e:
         return _handle_error(e)
 

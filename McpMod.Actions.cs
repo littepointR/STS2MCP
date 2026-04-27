@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
@@ -38,12 +39,108 @@ using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline;
 using MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen;
+using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
+using MegaCrit.Sts2.Core.Nodes.TopBar;
 using Godot;
 
 namespace STS2_MCP;
 
 public static partial class McpMod
 {
+    private static async Task<Dictionary<string, object?>> ExecuteSaveAndQuitToMenuAsync()
+    {
+        var clickedSaveAndQuit = false;
+
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            var result = await RunOnMainThread(() => AdvanceSaveAndQuitToMenu(clickedSaveAndQuit));
+            if (result.TryGetValue("status", out var status) && string.Equals(status?.ToString(), "error", System.StringComparison.Ordinal))
+                return result;
+
+            if (result.TryGetValue("done", out var done) && done is true)
+                return result;
+
+            if (result.TryGetValue("phase", out var phase) &&
+                string.Equals(phase?.ToString(), "clicked_save_and_quit", System.StringComparison.Ordinal))
+            {
+                clickedSaveAndQuit = true;
+            }
+
+            await Task.Delay(100);
+        }
+
+        return Error("Timed out waiting for Save and Quit to return to the main menu");
+    }
+
+    private static Dictionary<string, object?> AdvanceSaveAndQuitToMenu(bool clickedSaveAndQuit)
+    {
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return Error("Cannot access scene tree");
+
+        if (!RunManager.Instance.IsInProgress)
+        {
+            var mainMenu = FindFirst<NMainMenu>(tree.Root);
+            if (mainMenu != null && IsNodeVisible(mainMenu))
+            {
+                return new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = "Saved and returned to main menu",
+                    ["done"] = true
+                };
+            }
+
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = "Run stopped; waiting for main menu",
+                ["phase"] = "waiting_for_main_menu"
+            };
+        }
+
+        if (IsMultiplayerRun())
+            return Error("Cannot save/load a multiplayer run through singleplayer sl()");
+
+        if (clickedSaveAndQuit)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = "Waiting for Save and Quit to finish",
+                ["phase"] = "waiting_for_main_menu"
+            };
+        }
+
+        var pauseMenu = FindAll<NPauseMenu>(tree.Root).FirstOrDefault(IsNodeVisible);
+        if (pauseMenu == null)
+        {
+            var pauseButton = FindFirst<NTopBarPauseButton>(tree.Root);
+            if (!IsControlVisibleOrActionable(pauseButton))
+                return Error("Pause button is not available; cannot open Save and Quit");
+
+            pauseButton!.ForceClick();
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = "Opening pause menu",
+                ["phase"] = "opening_pause_menu"
+            };
+        }
+
+        var saveAndQuitButton = GetInstanceFieldValue(pauseMenu, "_saveAndQuitButton") as NClickableControl;
+        if (!IsControlVisibleOrActionable(saveAndQuitButton))
+            return Error("Save and Quit button is not available");
+
+        saveAndQuitButton!.ForceClick();
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = "Clicked Save and Quit",
+            ["phase"] = "clicked_save_and_quit"
+        };
+    }
+
     private static Dictionary<string, object?> ExecuteAction(string action, Dictionary<string, JsonElement> data)
     {
         if (!RunManager.Instance.IsInProgress)

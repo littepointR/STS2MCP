@@ -9,7 +9,7 @@ HTTP API served by the STS2_MCP mod on `localhost:15526`. No authentication. Loc
 - `POST /api/v1/multiplayer` — perform a multiplayer action
 - `GET  /api/v1/profile` — read current profile progress
 - `GET  /api/v1/profiles` — list profile slots
-- `POST /api/v1/profiles` — switch or delete profile slots
+- `POST /api/v1/profiles` — switch profile slots
 
 The endpoints are mutually exclusive: calling singleplayer during a multiplayer run (or vice versa) returns HTTP 409.
 
@@ -781,18 +781,12 @@ Switch to a profile slot through the game's profile UI:
 { "action": "switch", "profile_id": 2 }
 ```
 
-Delete an inactive profile slot:
-
-```json
-{ "action": "delete", "profile_id": 2 }
-```
-
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `action` | string | Yes | `switch` or `delete` |
+| `action` | string | Yes | `switch` |
 | `profile_id` | int | Yes | Profile slot, from 1 to 3 |
 
-Switching is rejected during a run. Deleting the active profile is rejected; switch away first if you need to remove a slot.
+Switching is rejected during a run. Profile deletion is intentionally not exposed through the MCP tool surface.
 
 ---
 
@@ -833,6 +827,18 @@ Select an option from the main menu, a menu submenu, profile select, character s
 
 `game_over` advertises only `main_menu`. `continue` is not actionable on that screen and returns an error.
 If `timeline` is blocked by pending obtained epochs, `menu_select` returns an error with `manual_action_required: true` and `pending_epoch_ids` instead of opening Timeline.
+
+---
+
+### `save_and_quit_to_menu`
+
+Internal action used by the MCP `sl()` tool. It saves a singleplayer run, quits to the main menu, and stops there; use `menu_select` with `continue` to load the run again.
+
+```json
+{ "action": "save_and_quit_to_menu" }
+```
+
+This action rejects multiplayer runs.
 
 ---
 
