@@ -1,6 +1,6 @@
 # API Quick Reference
 
-HTTP API on `localhost:15526`. No authentication.
+HTTP API on `localhost:15526` by default. No authentication. If `STS2_MCP.conf` sets a different port, use that port for all examples below.
 
 - `GET /api/v1/singleplayer` — read game state
 - `POST /api/v1/singleplayer` — perform action
@@ -46,7 +46,15 @@ Every JSON response includes:
 
 ## POST — Actions
 
-All POST requests use JSON body with `"action"` field. All responses include `{ "status": "ok" | "error", "message": "..." }`.
+All POST requests use JSON body with `"action"` field. All responses include `{ "status": "ok" | "error" }` and either `message` or `error`.
+
+### Run Control
+
+| Action | Parameters | When to Use |
+|---|---|---|
+| `sl` | _(none)_ | One-click save/load: opens the pause menu, saves and quits to the main menu, continues the run, and blocks until the run is loaded again. |
+
+`sl` is a single blocking workflow, not a split save/load API. It only works while a singleplayer run is in progress. On success it returns `{ "status": "ok", "message": "Save/load completed", "state_type": "...", "elapsed_ms": N }`. If a UI step times out, it returns `{ "status": "error", "error": "...", "phase": "...", "elapsed_ms": N }`.
 
 ### Combat
 

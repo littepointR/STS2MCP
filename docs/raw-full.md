@@ -1,6 +1,6 @@
 # Full API Reference
 
-HTTP API served by the STS2_MCP mod on `localhost:15526`. No authentication. Local use only.
+HTTP API served by the STS2_MCP mod on `localhost:15526` by default. No authentication. Local use only. If `STS2_MCP.conf` sets a different port, use that port for all examples below.
 
 **Endpoints:**
 - `GET  /api/v1/singleplayer` — read current game state
@@ -728,6 +728,40 @@ All POST requests use a JSON body with an `"action"` field and action-specific p
 ```jsonc
 { "status": "error", "error": "Card requires a target. Provide 'target' with an entity_id." }
 ```
+
+---
+
+### `sl`
+
+One-click save/load for singleplayer runs. This is a blocking workflow, not a split save/load API: it opens the pause menu, clicks Save and Quit, waits for the main menu, clicks Continue, and waits until the run is loaded again.
+
+```json
+{ "action": "sl" }
+```
+
+On success:
+
+```jsonc
+{
+  "status": "ok",
+  "message": "Save/load completed",
+  "state_type": "map",
+  "elapsed_ms": 12345
+}
+```
+
+On timeout or an unreachable UI step:
+
+```jsonc
+{
+  "status": "error",
+  "error": "Timed out during continue_run: Continue button is not available",
+  "phase": "continue_run",
+  "elapsed_ms": 60000
+}
+```
+
+**Errors:** No singleplayer run in progress, pause menu unavailable, Save and Quit unavailable, Continue unavailable, or run load timeout.
 
 ---
 

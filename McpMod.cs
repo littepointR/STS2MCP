@@ -395,6 +395,13 @@ public static partial class McpMod
 
         try
         {
+            if (action == "sl")
+            {
+                var slResult = ExecuteSlAsync().GetAwaiter().GetResult();
+                SendJson(response, slResult);
+                return;
+            }
+
             var resultTask = RunOnMainThread(() => ExecuteAction(action, parsed));
             var result = resultTask.GetAwaiter().GetResult();
             SendJson(response, result);

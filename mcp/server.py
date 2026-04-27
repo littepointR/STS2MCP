@@ -32,8 +32,8 @@ async def _get(params: dict | None = None) -> str:
         return r.text
 
 
-async def _post(body: dict) -> str:
-    async with httpx.AsyncClient(timeout=10, trust_env=_trust_env) as client:
+async def _post(body: dict, timeout: float = 10) -> str:
+    async with httpx.AsyncClient(timeout=timeout, trust_env=_trust_env) as client:
         r = await client.post(_sp_url(), json=body)
         r.raise_for_status()
         return r.text
@@ -127,6 +127,15 @@ async def proceed_to_map() -> str:
     """
     try:
         return await _post({"action": "proceed"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def sl() -> str:
+    """[Run Control] Save and quit to the main menu, continue the run, and wait until the run is loaded again."""
+    try:
+        return await _post({"action": "sl"}, timeout=75)
     except Exception as e:
         return _handle_error(e)
 

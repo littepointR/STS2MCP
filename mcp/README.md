@@ -1,5 +1,13 @@
 # MCP Tools
 
+By default the MCP server connects to the game mod at `localhost:15526`.
+If the mod's `STS2_MCP.conf` uses a different port, start the server with the
+same value, for example:
+
+```bash
+uv run --directory /path/to/STS2_MCP/mcp python server.py --port 16526
+```
+
 ## Singleplayer
 
 | Tool | Scope | Description |
@@ -8,6 +16,7 @@
 | `use_potion(slot, target?)` | General | Use a potion (works in and out of combat) |
 | `discard_potion(slot)` | General | Discard a potion to free up the slot |
 | `proceed_to_map()` | General | Proceed from rewards/rest site/shop/treasure to the map |
+| `sl()` | Run Control | Save and quit to main menu, continue the run, and wait for the run to load |
 | `combat_play_card(card_index, target?)` | Combat | Play a card from hand |
 | `combat_end_turn()` | Combat | End the current turn |
 | `combat_select_card(card_index)` | Combat Selection | Select a card from hand during exhaust/discard prompts |

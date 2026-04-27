@@ -1,13 +1,21 @@
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
+using System.Threading.Tasks;
+using Godot;
+using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Rewards;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
+using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
 using MegaCrit.Sts2.Core.Nodes.Relics;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic;
@@ -18,6 +26,7 @@ using MegaCrit.Sts2.Core.Nodes.Events.Custom;
 using MegaCrit.Sts2.Core.Nodes.Events.Custom.CrystalSphere;
 using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.TopBar;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Nodes.RestSite;
@@ -38,6 +47,9 @@ namespace STS2_MCP;
 
 public static partial class McpMod
 {
+    private const int SlTimeoutMs = 60000;
+    private const int SlPollMs = 100;
+
     private static Dictionary<string, object?> ExecuteAction(string action, Dictionary<string, JsonElement> data)
     {
         if (!RunManager.Instance.IsInProgress)
@@ -134,6 +146,218 @@ public static partial class McpMod
             ["status"] = "ok",
             ["message"] = $"Playing '{card.Title}'" + (target != null ? $" targeting {SafeGetText(() => target.Monster?.Title) ?? "target"}" : "")
         };
+    }
+
+    private static async Task<Dictionary<string, object?>> ExecuteSlAsync()
+    {
+        var stopwatch = Stopwatch.StartNew();
+        string phase = "validate_run";
+
+        try
+        {
+            var validation = await RunOnMainThread(() =>
+            {
+                if (!RunManager.Instance.IsInProgress)
+                    return Error("No singleplayer run in progress");
+                return (Dictionary<string, object?>?)null;
+            });
+            if (validation != null)
+                return validation;
+
+            phase = "open_pause_menu";
+            bool pauseClicked = false;
+            var openPauseResult = await WaitForSlPhase(phase, stopwatch, () =>
+            {
+                if (!RunManager.Instance.IsInProgress)
+                    return SlStep.Failed("Run ended before the pause menu could be opened");
+                if (FindFirst<NPauseMenu>(GetRootNode()) != null)
+                    return SlStep.Done();
+                if (pauseClicked)
+                    return SlStep.Waiting("Waiting for pause menu to open");
+
+                var pauseButton = FindFirst<NTopBarPauseButton>(GetRootNode());
+                if (pauseButton is not { IsEnabled: true } || !pauseButton.IsVisibleInTree())
+                    return SlStep.Waiting("Pause button is not available");
+
+                pauseButton.ForceClick();
+                pauseClicked = true;
+                return SlStep.Waiting("Opening pause menu");
+            });
+            if (openPauseResult != null)
+                return openPauseResult;
+
+            phase = "save_and_quit";
+            bool saveAndQuitClicked = false;
+            var saveQuitResult = await WaitForSlPhase(phase, stopwatch, () =>
+            {
+                if (!RunManager.Instance.IsInProgress)
+                    return SlStep.Done();
+                if (saveAndQuitClicked)
+                    return SlStep.Waiting("Waiting for save and quit to reach the main menu");
+
+                var pauseMenu = FindFirst<NPauseMenu>(GetRootNode());
+                if (pauseMenu == null)
+                    return SlStep.Waiting("Pause menu is not open");
+
+                var saveAndQuitButton = FindSlPauseButton(pauseMenu);
+                if (saveAndQuitButton is not { IsEnabled: true } || !saveAndQuitButton.IsVisibleInTree())
+                    return SlStep.Waiting("Save and Quit button is not available");
+
+                saveAndQuitButton.ForceClick();
+                saveAndQuitClicked = true;
+                return SlStep.Waiting("Saving and quitting to main menu");
+            });
+            if (saveQuitResult != null)
+                return saveQuitResult;
+
+            phase = "continue_run";
+            bool continueClicked = false;
+            var continueResult = await WaitForSlPhase(phase, stopwatch, () =>
+            {
+                if (RunManager.Instance.IsInProgress)
+                    return SlStep.Done();
+                if (continueClicked)
+                    return SlStep.Waiting("Waiting for continued run to start loading");
+
+                var mainMenu = NGame.Instance?.MainMenu ?? FindFirst<NMainMenu>(GetRootNode());
+                if (mainMenu == null)
+                    return SlStep.Waiting("Main menu is not available");
+
+                var continueButton = FindSlContinueButton(mainMenu);
+                if (continueButton is not { IsEnabled: true } || !continueButton.IsVisibleInTree())
+                    return SlStep.Waiting("Continue button is not available");
+
+                continueButton.ForceClick();
+                continueClicked = true;
+                return SlStep.Waiting("Continuing saved run");
+            });
+            if (continueResult != null)
+                return continueResult;
+
+            phase = "wait_run_loaded";
+            Dictionary<string, object?>? loadedState = null;
+            var loadResult = await WaitForSlPhase(phase, stopwatch, () =>
+            {
+                if (!RunManager.Instance.IsInProgress)
+                    return SlStep.Waiting("Run is not in progress yet");
+
+                var state = BuildGameState();
+                string stateType = GetStateType(state);
+                if (stateType is "menu" or "unknown")
+                    return SlStep.Waiting($"State is still {stateType}");
+
+                loadedState = state;
+                return SlStep.Done();
+            });
+            if (loadResult != null)
+                return loadResult;
+
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = "Save/load completed",
+                ["state_type"] = loadedState != null ? GetStateType(loadedState) : "unknown",
+                ["elapsed_ms"] = stopwatch.ElapsedMilliseconds
+            };
+        }
+        catch (Exception ex)
+        {
+            return SlError(phase, ex.Message, stopwatch.ElapsedMilliseconds);
+        }
+    }
+
+    private static async Task<Dictionary<string, object?>?> WaitForSlPhase(
+        string phase,
+        Stopwatch stopwatch,
+        Func<SlStep> step)
+    {
+        string lastMessage = "";
+        while (stopwatch.ElapsedMilliseconds < SlTimeoutMs)
+        {
+            SlStep result = await RunOnMainThread(step);
+            if (result.IsDone)
+                return null;
+            if (result.Error != null)
+                return SlError(phase, result.Error, stopwatch.ElapsedMilliseconds);
+
+            lastMessage = result.Message ?? lastMessage;
+            await Task.Delay(SlPollMs);
+        }
+
+        string message = string.IsNullOrWhiteSpace(lastMessage)
+            ? $"Timed out during {phase}"
+            : $"Timed out during {phase}: {lastMessage}";
+        return SlError(phase, message, stopwatch.ElapsedMilliseconds);
+    }
+
+    private static Dictionary<string, object?> SlError(string phase, string message, long elapsedMs)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "error",
+            ["error"] = message,
+            ["phase"] = phase,
+            ["elapsed_ms"] = elapsedMs
+        };
+    }
+
+    private static Node GetRootNode()
+    {
+        return ((Godot.SceneTree)Godot.Engine.GetMainLoop()).Root;
+    }
+
+    private static string GetStateType(Dictionary<string, object?> state)
+    {
+        return state.TryGetValue("state_type", out var value) ? value?.ToString() ?? "unknown" : "unknown";
+    }
+
+    private static NPauseMenuButton? FindSlPauseButton(NPauseMenu pauseMenu)
+    {
+        var saveAndQuitButton = GetPrivateField<NPauseMenuButton>(pauseMenu, "_saveAndQuitButton");
+        if (saveAndQuitButton != null)
+            return saveAndQuitButton;
+
+        return FindAll<NPauseMenuButton>(pauseMenu)
+            .Where(button => button.IsVisibleInTree())
+            .LastOrDefault();
+    }
+
+    private static NMainMenuTextButton? FindSlContinueButton(NMainMenu mainMenu)
+    {
+        var continueButton = GetPrivateField<NMainMenuTextButton>(mainMenu, "_continueButton");
+        if (continueButton != null)
+            return continueButton;
+
+        var button = FindFirst<NMainMenuContinueButton>(mainMenu);
+        if (button != null)
+            return button;
+
+        return FindAll<NMainMenuTextButton>(mainMenu)
+            .Where(candidate => candidate.IsVisibleInTree())
+            .Skip(1)
+            .FirstOrDefault();
+    }
+
+    private static T? GetPrivateField<T>(object instance, string fieldName) where T : class
+    {
+        try
+        {
+            var field = instance.GetType().GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            return field?.GetValue(instance) as T;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private readonly record struct SlStep(bool IsDone, string? Error, string? Message)
+    {
+        public static SlStep Done() => new(true, null, null);
+        public static SlStep Failed(string error) => new(false, error, null);
+        public static SlStep Waiting(string message) => new(false, null, message);
     }
 
     private static Dictionary<string, object?> ExecuteEndTurn(Player player)

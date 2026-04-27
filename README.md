@@ -27,6 +27,13 @@ Grab the [latest release](https://github.com/Gennadiyev/STS2MCP/releases/latest)
 > [!note]
 > The release DLL is a platform-agnostic .NET assembly — the same `STS2_MCP.dll` and `STS2_MCP.json` work on Windows, Linux, and macOS. No separate builds are needed.
 
+> [!tip]
+> If `localhost:15526` is unavailable on your machine, edit `STS2_MCP.conf` next to the DLL and set another port, then restart the game:
+> ```json
+> { "port": 16526 }
+> ```
+> Use the same port in the MCP server with `--port 16526`.
+
 #### macOS install
 
 On macOS, the mods directory lives inside the app bundle. The default Steam install path is:
@@ -95,6 +102,19 @@ Add the server to your AI client's MCP config:
 **Claude Desktop**: add to `claude_desktop_config.json` with the same config as above.
 *Other agents should have similar config options for custom MCP servers.*
 
+If you changed the mod port in `STS2_MCP.conf`, pass the same port to the MCP server:
+
+```json
+{
+  "mcpServers": {
+    "sts2": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/STS2_MCP/mcp", "python", "server.py", "--port", "16526"]
+    }
+  }
+}
+```
+
 > [!tip]
 > On macOS, use the absolute path to `uv` (e.g. `/opt/homebrew/bin/uv`) in the `command` field. GUI-launched apps may not inherit your shell's `PATH`, which would prevent the server from starting.
 
@@ -103,6 +123,16 @@ Restart your Claude session after adding the config. To verify the MCP server is
 The MCP server accepts `--host` and `--port` options if you need non-default settings.
 
 Flag `--no-trust-env` can be used to disable `requests` from picking up proxy settings from the environment, which can cause connection issues if you are running the server in a container.
+
+### Optional run control
+
+This fork also exposes an `sl()` MCP tool and matching HTTP action:
+
+```json
+{ "action": "sl" }
+```
+
+It saves and quits the active singleplayer run, continues it from the main menu, and waits until the run is loaded again. This is useful when you need the game to refresh a run without manual UI interaction. Use a DLL built from this fork, or a release from this fork that includes the change, to get this tool. The rest of the original HTTP API, MCP setup, and Windows/Linux/macOS install flow remain unchanged.
 
 ## For Developers
 
