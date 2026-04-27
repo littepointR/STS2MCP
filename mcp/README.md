@@ -13,6 +13,10 @@ uv run --directory /path/to/STS2_MCP/mcp python server.py --port 16526
 | Tool | Scope | Description |
 |---|---|---|
 | `get_game_state(format?)` | General | Get current game state (`markdown` or `json`) |
+| `menu_select(option, seed?)` | General | Select a visible menu/game-over option |
+| `get_profile()` | Profiles | Get active profile progress |
+| `list_profiles()` | Profiles | List profile slots and active slot |
+| `switch_profile(profile_id)` | Profiles | Switch to a profile slot through the game UI |
 | `use_potion(slot, target?)` | General | Use a potion (works in and out of combat) |
 | `discard_potion(slot)` | General | Discard a potion to free up the slot |
 | `proceed_to_map()` | General | Proceed from rewards/rest site/shop/treasure to the map |

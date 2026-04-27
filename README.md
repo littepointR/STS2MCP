@@ -18,7 +18,7 @@ Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.103.2`.
 
 ### 1. Install the Mod
 
-Grab the [latest release](https://github.com/Gennadiyev/STS2MCP/releases/latest) and follow the instructions:
+Grab the [latest release](https://github.com/littepointR/STS2MCP/releases/latest) and follow the instructions:
 
 1. Copy `STS2_MCP.dll` and `STS2_MCP.json` to `<game_install>/mods/`
 2. Launch the game and enable mods in settings (a consent dialog appears on first launch)
@@ -62,7 +62,7 @@ curl -s http://localhost:15526/
 A successful response looks like:
 
 ```json
-{"message": "Hello from STS2 MCP v0.3.4", "status": "ok"}
+{"message": "Hello from STS2 MCP v0.3.5-sl2", "status": "ok"}
 ```
 
 If you get "Connection refused", the mod is not loaded — check that mods are enabled in the game's settings.
@@ -126,13 +126,13 @@ Flag `--no-trust-env` can be used to disable `requests` from picking up proxy se
 
 ### Optional run control
 
-This fork also exposes an `sl()` MCP tool and matching HTTP action:
+This fork exposes an `sl()` MCP tool backed by the internal HTTP action:
 
 ```json
-{ "action": "sl" }
+{ "action": "save_and_quit_to_menu" }
 ```
 
-It saves and quits the active singleplayer run, continues it from the main menu, and waits until the run is loaded again. This is useful when you need the game to refresh a run without manual UI interaction. Use a DLL built from this fork, or a release from this fork that includes the change, to get this tool. The rest of the original HTTP API, MCP setup, and Windows/Linux/macOS install flow remain unchanged.
+The HTTP action only saves and quits the active singleplayer run to the main menu. The MCP `sl()` tool then calls `menu_select("continue")` and waits until the run is loaded again. This is useful when you need the game to refresh a run without manual UI interaction. Use a DLL built from this fork, or a release from this fork that includes the change, to get this tool. The rest of the original HTTP API, MCP setup, and Windows/Linux/macOS install flow remain unchanged.
 
 ## For Developers
 
