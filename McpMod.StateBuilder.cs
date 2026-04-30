@@ -312,6 +312,7 @@ public static partial class McpMod
                             var fields = new[] { "_continueButton", "_singleplayerButton", "_multiplayerButton", "_compendiumButton", "_timelineButton", "_settingsButton", "_quitButton" };
                             var labels = new[] { "continue", "singleplayer", "multiplayer", "compendium", "timeline", "settings", "quit" };
                             var unrevealedEpochs = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
+                            var timelineOptionVisible = false;
                             for (int i = 0; i < fields.Length; i++)
                             {
                                 try
@@ -322,25 +323,25 @@ public static partial class McpMod
                                         clickable.Visible &&
                                         clickable.IsVisibleInTree())
                                     {
-                                        if (labels[i] == "timeline" && unrevealedEpochs.Count > 0)
-                                        {
-                                            blockedOptions.Add(new Dictionary<string, object?>
-                                            {
-                                                ["name"] = "timeline",
-                                                ["enabled"] = false,
-                                                ["reason"] = "manual_epoch_reveal_required",
-                                                ["pending_epoch_ids"] = unrevealedEpochs
-                                            });
-                                            continue;
-                                        }
-
                                         options.Add(labels[i]);
+                                        if (labels[i] == "timeline")
+                                            timelineOptionVisible = true;
                                     }
                                 }
                                 catch { }
                             }
                             if (options.Count > 0)
                                 result["options"] = options;
+                            if (timelineOptionVisible && unrevealedEpochs.Count > 0)
+                            {
+                                blockedOptions.Add(new Dictionary<string, object?>
+                                {
+                                    ["name"] = "timeline",
+                                    ["enabled"] = true,
+                                    ["reason"] = "manual_epoch_reveal_required",
+                                    ["pending_epoch_ids"] = unrevealedEpochs
+                                });
+                            }
                             if (blockedOptions.Count > 0)
                                 result["blocked_options"] = blockedOptions;
                         }

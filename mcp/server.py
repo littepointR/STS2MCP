@@ -218,9 +218,9 @@ async def menu_select(option: str, seed: str | None = None) -> str:
     tutorial prompts, and game-over main-menu return.
 
     Args:
-        option: Option ID from the current menu state's options list. If an
-            option is listed under blocked_options, selecting it returns the
-            API's manual-action response instead of forcing UI entry.
+        option: Option ID from the current menu state's options list. Entries
+            in blocked_options are advisory metadata for visible options that
+            may need follow-up actions such as timeline advance.
         seed: Optional seed for supported embark flows. Standard mode rejects seeds.
     """
     body: dict = {"action": "menu_select", "option": option}

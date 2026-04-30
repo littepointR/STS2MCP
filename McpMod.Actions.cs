@@ -1451,13 +1451,6 @@ public static partial class McpMod
 
             // Main menu buttons
             var normalizedMainMenuOption = option.ToLowerInvariant();
-            if (normalizedMainMenuOption == "timeline")
-            {
-                var unrevealedEpochs = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
-                if (unrevealedEpochs.Count > 0)
-                    return TimelineUnlocksNeedManualReveal(unrevealedEpochs);
-            }
-
             var menuFieldName = normalizedMainMenuOption switch
             {
                 "singleplayer" => "_singleplayerButton",
@@ -1476,17 +1469,6 @@ public static partial class McpMod
         }
 
         return Error("Not on a menu screen");
-    }
-
-    private static Dictionary<string, object?> TimelineUnlocksNeedManualReveal(List<string> unrevealedEpochs)
-    {
-        return new Dictionary<string, object?>
-        {
-            ["status"] = "error",
-            ["error"] = "Timeline has obtained epochs that still need to be revealed manually; not opening Timeline because this game state logs invalid unlock-state errors when entered through automation",
-            ["pending_epoch_ids"] = unrevealedEpochs,
-            ["manual_action_required"] = true
-        };
     }
 
     private static Dictionary<string, object?> ExecutePopupOption(

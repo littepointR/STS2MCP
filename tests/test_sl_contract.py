@@ -158,6 +158,26 @@ class StaticContractTest(unittest.TestCase):
         self.assertNotIn("async def delete_profile", server)
         self.assertNotIn("delete_profile", readme)
 
+    def test_timeline_menu_entry_remains_selectable_with_pending_epochs(self):
+        actions = (ROOT / "McpMod.Actions.cs").read_text(encoding="utf-8-sig")
+        state_builder = (ROOT / "McpMod.StateBuilder.cs").read_text(encoding="utf-8-sig")
+        server = (ROOT / "mcp" / "server.py").read_text(encoding="utf-8")
+        docs = "\n".join(
+            [
+                (ROOT / "docs" / "raw-simplified.md").read_text(encoding="utf-8"),
+                (ROOT / "docs" / "raw-full.md").read_text(encoding="utf-8"),
+            ]
+        )
+
+        self.assertNotIn("TimelineUnlocksNeedManualReveal", actions)
+        self.assertNotIn('normalizedMainMenuOption == "timeline"', actions)
+        self.assertIn('"timeline" => "_timelineButton"', actions)
+        self.assertIn("timelineOptionVisible", state_builder)
+        self.assertIn('["enabled"] = true', state_builder)
+        self.assertIn("blocked_options are advisory metadata", server)
+        self.assertIn('`menu_select("timeline")` still opens Timeline', docs)
+        self.assertNotIn("instead of opening Timeline", docs)
+
 
 if __name__ == "__main__":
     unittest.main()
