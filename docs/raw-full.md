@@ -3,6 +3,7 @@
 HTTP API served by the STS2_MCP mod on `localhost:15526` by default. No authentication. Local use only. If `STS2_MCP.conf` sets a different port, use that port for all examples below.
 
 **Endpoints:**
+
 - `GET  /api/v1/singleplayer` — read current game state
 - `POST /api/v1/singleplayer` — perform a game action
 - `GET  /api/v1/multiplayer` — read multiplayer game state
@@ -782,7 +783,7 @@ Switch to a profile slot through the game's profile UI:
 ```
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `action` | string | Yes | `switch` |
 | `profile_id` | int | Yes | Profile slot, from 1 to 3 |
 
@@ -821,7 +822,7 @@ Select an option from the main menu, a menu submenu, profile select, character s
 ```
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `option` | string | Yes | One of the current state's advertised menu options. Matching is case-insensitive. |
 | `seed` | string | No | Only supported in menu contexts that expose a real seeded flow. Standard singleplayer character select currently returns an error without starting a run when `seed` is supplied. |
 
@@ -832,13 +833,13 @@ If `timeline` has pending obtained epochs, the menu state may include advisory `
 
 ### `save_and_quit_to_menu`
 
-Internal action used by the MCP `sl()` tool. It saves a singleplayer run, quits to the main menu, and stops there; use `menu_select` with `continue` to load the run again.
+Internal action used by the MCP `sl()` and `mp_sl()` tools. It saves the active run, quits to the main menu, and stops there; use `menu_select` with `continue` to load the run again. `sl()` calls this through `/api/v1/singleplayer`; `mp_sl()` calls it through `/api/v1/multiplayer` and waits for multiplayer state after continuing.
 
 ```json
 { "action": "save_and_quit_to_menu" }
 ```
 
-This action rejects multiplayer runs.
+The singleplayer endpoint rejects multiplayer runs. The multiplayer endpoint accepts this action only during multiplayer runs.
 
 ---
 
@@ -851,7 +852,7 @@ Play a card from hand during combat.
 ```
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `card_index` | int | Yes | 0-based index in hand |
 | `target` | string | For `AnyEnemy` cards | `entity_id` of the target enemy |
 
@@ -868,7 +869,7 @@ Use a potion from the potion belt.
 ```
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `slot` | int | Yes | Potion slot index |
 | `target` | string | For `AnyEnemy` potions | `entity_id` of the target enemy |
 
@@ -1041,6 +1042,7 @@ Select a card in a card selection overlay.
 | `index` | int | Yes | 0-based card index in the grid |
 
 **Behavior varies by screen type:**
+
 - Grid screens (transform, upgrade, select): toggles selection. When enough cards are selected, a preview may appear.
 - Choose-a-card screens (potions, effects): picks the card immediately.
 
@@ -1063,6 +1065,7 @@ Cancel or close the card selection overlay.
 ```
 
 **Behavior:**
+
 - If a preview is showing: cancels back to the selection grid.
 - For choose-a-card screens: clicks the skip button (if available).
 - Otherwise: closes the selection screen (if cancellation is allowed).
@@ -1148,7 +1151,7 @@ Reveal a cell in the Crystal Sphere.
 ```
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `x` | int | Yes | Cell x-coordinate |
 | `y` | int | Yes | Cell y-coordinate |
 
@@ -1283,15 +1286,19 @@ Finish the Crystal Sphere minigame.
 ### Multiplayer-Only Actions
 
 **End turn (vote):**
+
 ```json
 { "action": "end_turn" }
 ```
+
 In multiplayer, this is a vote. The turn ends only when all players submit.
 
 **Undo end turn:**
+
 ```json
 { "action": "undo_end_turn" }
 ```
+
 Retract the end-turn vote before all players have committed.
 
-All other actions work identically to singleplayer.
+All other actions work identically to singleplayer. The MCP `mp_sl()` tool wraps multiplayer `save_and_quit_to_menu`, menu `continue`, and multiplayer state polling for a one-click multiplayer save/load workflow.

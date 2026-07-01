@@ -335,6 +335,20 @@ public static partial class McpMod
 
         string action = actionElem.GetString() ?? "";
 
+        if (action == "save_and_quit_to_menu")
+        {
+            try
+            {
+                var result = ExecuteSaveAndQuitToMenuAsync(allowMultiplayer: true).GetAwaiter().GetResult();
+                SendJson(response, result);
+            }
+            catch (Exception ex)
+            {
+                SendError(response, 500, $"Multiplayer save and quit failed: {ex.Message}");
+            }
+            return;
+        }
+
         try
         {
             var resultTask = RunOnMainThread(() => ExecuteMultiplayerAction(action, parsed));

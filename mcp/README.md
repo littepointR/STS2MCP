@@ -11,7 +11,7 @@ uv run --directory /path/to/STS2_MCP/mcp python server.py --port 16526
 ## Singleplayer
 
 | Tool | Scope | Description |
-|---|---|---|
+| --- | --- | --- |
 | `get_game_state(format?)` | General | Get current game state (`markdown` or `json`) |
 | `menu_select(option, seed?)` | General | Select a visible menu/game-over option |
 | `get_profile()` | Profiles | Get active profile progress |
@@ -51,7 +51,7 @@ uv run --directory /path/to/STS2_MCP/mcp python server.py --port 16526
 All multiplayer tools are prefixed with `mp_`. They route through `/api/v1/multiplayer` and are only available during multiplayer (co-op) runs. The endpoints automatically guard against cross-mode calls.
 
 | Tool | Scope | Description |
-|---|---|---|
+| --- | --- | --- |
 | `mp_get_game_state(format?)` | General | Get multiplayer game state (all players, votes, bids) |
 | `mp_combat_play_card(card_index, target?)` | Combat | Play a card from the local player's hand |
 | `mp_combat_end_turn()` | Combat | Submit end-turn vote (turn ends when all players submit) |
@@ -59,6 +59,7 @@ All multiplayer tools are prefixed with `mp_`. They route through `/api/v1/multi
 | `mp_use_potion(slot, target?)` | General | Use a potion from the local player's slots |
 | `mp_discard_potion(slot)` | General | Discard a potion from the local player's slots |
 | `mp_proceed_to_map()` | General | Proceed from current screen to the map |
+| `mp_sl()` | Run Control | Save and quit to main menu, continue the multiplayer run, and wait for it to load |
 | `mp_map_vote(node_index)` | Map | Vote for a map node (travel when all agree) |
 | `mp_event_choose_option(option_index)` | Event | Vote for / choose an event option |
 | `mp_event_advance_dialogue()` | Event | Advance ancient event dialogue |

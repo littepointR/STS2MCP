@@ -2,6 +2,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -9,14 +10,27 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def load_server_module():
+def load_server_module() -> types.ModuleType:
     module_name = "sts2_mcp_server_under_test"
     sys.modules.pop(module_name, None)
-    spec = importlib.util.spec_from_file_location(module_name, ROOT / "mcp" / "server.py")
+    spec = importlib.util.spec_from_file_location(
+        module_name, ROOT / "mcp" / "server.py"
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("Unable to load mcp/server.py module spec")
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def parse_json_object(text: str) -> dict:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"Expected JSON object, got: {text!r}") from exc
+    if not isinstance(parsed, dict):
+        raise AssertionError(f"Expected JSON object, got: {type(parsed).__name__}")
+    return parsed
 
 
 class SlContractTest(unittest.IsolatedAsyncioTestCase):
@@ -54,7 +68,7 @@ class SlContractTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(server, "_get", fake_get),
             mock.patch.object(server.asyncio, "sleep", fake_sleep),
         ):
-            result = json.loads(await server.sl())
+            result = parse_json_object(await server.sl())
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(
@@ -106,7 +120,7 @@ class SlContractTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(server, "_get", fake_get),
             mock.patch.object(server.asyncio, "sleep", fake_sleep),
         ):
-            result = json.loads(await server.sl())
+            result = parse_json_object(await server.sl())
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["state"]["state_type"], "boss")
@@ -122,7 +136,13 @@ class SlContractTest(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(f"unexpected POST body: {body!r}")
 
         async def fake_get(params=None):
-            return json.dumps({"state_type": "menu", "menu_screen": "main", "options": ["singleplayer"]})
+            return json.dumps(
+                {
+                    "state_type": "menu",
+                    "menu_screen": "main",
+                    "options": ["singleplayer"],
+                }
+            )
 
         async def fake_sleep(_seconds):
             return None
@@ -132,10 +152,69 @@ class SlContractTest(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(server, "_get", fake_get),
             mock.patch.object(server.asyncio, "sleep", fake_sleep),
         ):
-            result = json.loads(await server.sl())
+            result = parse_json_object(await server.sl())
 
         self.assertEqual(result["status"], "error")
         self.assertIn("continue", result["error"])
+
+    async def test_mp_sl_saves_to_menu_then_uses_menu_continue_and_waits_for_mp_state(
+        self,
+    ):
+        server = self.server
+        calls = []
+        menu_states = [
+            {"state_type": "menu", "menu_screen": "main", "options": ["continue"]}
+        ]
+        mp_states = [
+            {"state_type": "unknown", "game_mode": "multiplayer"},
+            {"state_type": "map", "game_mode": "multiplayer"},
+        ]
+
+        async def fake_mp_post(body, timeout=10):
+            calls.append(("_mp_post", body, timeout))
+            if body == {"action": "save_and_quit_to_menu"}:
+                return json.dumps({"status": "ok", "message": "Saved multiplayer run"})
+            raise AssertionError(f"unexpected MP POST body: {body!r}")
+
+        async def fake_post(body, timeout=10):
+            calls.append(("_post", body, timeout))
+            if body == {"action": "menu_select", "option": "continue"}:
+                return json.dumps({"status": "ok", "message": "Selected continue"})
+            raise AssertionError(f"unexpected POST body: {body!r}")
+
+        async def fake_get(params=None):
+            calls.append(("_get", params))
+            if not menu_states:
+                raise AssertionError("mp_sl() polled menu state too many times")
+            return json.dumps(menu_states.pop(0))
+
+        async def fake_mp_get(params=None):
+            calls.append(("_mp_get", params))
+            if not mp_states:
+                raise AssertionError("mp_sl() polled multiplayer state too many times")
+            return json.dumps(mp_states.pop(0))
+
+        async def fake_sleep(_seconds):
+            calls.append(("sleep", _seconds))
+
+        with (
+            mock.patch.object(server, "_mp_post", fake_mp_post),
+            mock.patch.object(server, "_post", fake_post),
+            mock.patch.object(server, "_get", fake_get),
+            mock.patch.object(server, "_mp_get", fake_mp_get),
+            mock.patch.object(server.asyncio, "sleep", fake_sleep),
+        ):
+            result = parse_json_object(await server.mp_sl())
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["state"]["state_type"], "map")
+        self.assertEqual(
+            [call for call in calls if call[0] in {"_mp_post", "_post"}],
+            [
+                ("_mp_post", {"action": "save_and_quit_to_menu"}, 75),
+                ("_post", {"action": "menu_select", "option": "continue"}, 10),
+            ],
+        )
 
 
 class StaticContractTest(unittest.TestCase):
@@ -160,7 +239,9 @@ class StaticContractTest(unittest.TestCase):
 
     def test_timeline_menu_entry_remains_selectable_with_pending_epochs(self):
         actions = (ROOT / "McpMod.Actions.cs").read_text(encoding="utf-8-sig")
-        state_builder = (ROOT / "McpMod.StateBuilder.cs").read_text(encoding="utf-8-sig")
+        state_builder = (ROOT / "McpMod.StateBuilder.cs").read_text(
+            encoding="utf-8-sig"
+        )
         server = (ROOT / "mcp" / "server.py").read_text(encoding="utf-8")
         docs = "\n".join(
             [

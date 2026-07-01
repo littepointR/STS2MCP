@@ -15,6 +15,24 @@ namespace STS2_MCP;
 
 public static partial class McpMod
 {
+    private static bool IsPlayPhase(MegaCrit.Sts2.Core.Entities.Players.Player? player = null)
+    {
+        try
+        {
+            if (!MegaCrit.Sts2.Core.Combat.CombatManager.Instance.IsInProgress)
+                return false;
+
+            player ??= MegaCrit.Sts2.Core.Context.LocalContext.GetMe(
+                MegaCrit.Sts2.Core.Runs.RunManager.Instance.DebugOnlyGetState()!);
+
+            return player?.PlayerCombatState?.Phase == MegaCrit.Sts2.Core.Combat.PlayerTurnPhase.Play;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string? SafeGetCardDescription(CardModel card, PileType pile = PileType.Hand)
     {
         try { return StripRichTextTags(card.GetDescriptionForPile(pile)).Replace("\n", " "); }

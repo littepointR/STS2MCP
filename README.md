@@ -29,9 +29,11 @@ Grab the [latest release](https://github.com/littepointR/STS2MCP/releases/latest
 
 > [!tip]
 > If `localhost:15526` is unavailable on your machine, edit `STS2_MCP.conf` next to the DLL and set another port, then restart the game:
+>
 > ```json
 > { "port": 16526 }
 > ```
+>
 > Use the same port in the MCP server with `--port 16526`.
 
 #### macOS install
@@ -132,7 +134,7 @@ This fork exposes an `sl()` MCP tool backed by the internal HTTP action:
 { "action": "save_and_quit_to_menu" }
 ```
 
-The HTTP action only saves and quits the active singleplayer run to the main menu. The MCP `sl()` tool then calls `menu_select("continue")` and waits until the run is loaded again. This is useful when you need the game to refresh a run without manual UI interaction. Use a DLL built from this fork, or a release from this fork that includes the change, to get this tool. The rest of the original HTTP API, MCP setup, and Windows/Linux/macOS install flow remain unchanged.
+The HTTP action saves and quits the active run to the main menu. The MCP `sl()` tool calls the singleplayer endpoint, then calls `menu_select("continue")` and waits until the run is loaded again. The MCP `mp_sl()` tool does the same through the multiplayer endpoint and waits for multiplayer state to become available again. This is useful when you need the game to refresh a run without manual UI interaction. Use a DLL built from this fork, or a release from this fork that includes the change, to get this tool. The rest of the original HTTP API, MCP setup, and Windows/Linux/macOS install flow remain unchanged.
 
 ## For Developers
 
@@ -189,7 +191,7 @@ cp out/STS2_MCP/STS2_MCP.dll "$MODS_DIR/"
 cp mod_manifest.json "$MODS_DIR/STS2_MCP.json"
 ```
 
-> [!NOTE] 
+> [!NOTE]
 > `mod_manifest.json` is renamed to `STS2_MCP.json` on copy — the game's mod loader expects the manifest filename to match the mod ID.
 
 ## License
@@ -202,7 +204,7 @@ MIT
 
 I start building this mod with the hope that I can co-op with an AI player. Singleplayer is originally just built for validation.
 
-### You did not answer the question!
+### You did not answer the question
 
 First of all, I play lots of games, including service games that has daily/weekly tasks. I really hoped that modern AI could save me from the grind, which, if you have tried one or more of the GUI agents, never really materialized. Let's face it: modern AI is still pretty bad at gaming because no one cares.
 

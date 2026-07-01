@@ -7,7 +7,6 @@ as MCP tools for Claude Desktop / Claude Code.
 import argparse
 import asyncio
 import json
-import sys
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -55,8 +54,8 @@ async def _mp_get(params: dict | None = None) -> str:
         return r.text
 
 
-async def _mp_post(body: dict) -> str:
-    async with httpx.AsyncClient(timeout=10, trust_env=_trust_env) as client:
+async def _mp_post(body: dict, timeout: float = 10) -> str:
+    async with httpx.AsyncClient(timeout=timeout, trust_env=_trust_env) as client:
         r = await client.post(_mp_url(), json=body)
         r.raise_for_status()
         return r.text
@@ -88,7 +87,7 @@ async def _wait_for_profile(profile_id: int, fallback: str) -> str:
     for _ in range(30):
         await asyncio.sleep(0.1)
         profiles_text = await _profiles_get()
-        profiles = json.loads(profiles_text)
+        profiles = _parse_json_response(profiles_text)
         last_profiles = profiles
         if profiles.get("current_profile_id") == profile_id:
             return json.dumps(
@@ -129,13 +128,32 @@ def _json_response(status: str, **values: object) -> str:
 def _parse_json_response(text: str) -> dict:
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {"status": "error", "error": "Response was not JSON", "raw_response": text}
+    except json.JSONDecodeError as exc:
+        return {
+            "status": "error",
+            "error": "Response was not JSON",
+            "exception": str(exc),
+            "raw_response": text,
+        }
 
     if isinstance(parsed, dict):
         return parsed
 
-    return {"status": "error", "error": "Response was not an object", "raw_response": parsed}
+    return {
+        "status": "error",
+        "error": "Response was not an object",
+        "raw_response": parsed,
+    }
+
+
+def _http_error_state(e: httpx.HTTPStatusError) -> dict:
+    response = e.response
+    return {
+        "status": "error",
+        "state_type": "http_error",
+        "http_status": response.status_code,
+        "response": _parse_json_response(response.text),
+    }
 
 
 def _option_names(state: dict) -> set[str]:
@@ -152,7 +170,7 @@ def _option_names(state: dict) -> set[str]:
         if isinstance(option, dict):
             name = option.get("name")
             enabled = option.get("enabled", True)
-            if isinstance(name, str) and enabled is not False:
+            if isinstance(name, str) and (not isinstance(enabled, bool) or enabled):
                 names.add(name.lower())
 
     return names
@@ -167,7 +185,12 @@ def _is_run_loaded_state(state: dict) -> bool:
         battle = state.get("battle", {})
         if not isinstance(battle, dict):
             return False
-        if battle.get("turn") != "player" or battle.get("is_play_phase") is not True:
+        is_play_phase = battle.get("is_play_phase")
+        if (
+            battle.get("turn") != "player"
+            or not isinstance(is_play_phase, bool)
+            or not is_play_phase
+        ):
             return False
 
         player = state.get("player", {})
@@ -270,26 +293,23 @@ async def switch_profile(profile_id: int) -> str:
     try:
         body = {"action": "switch", "profile_id": profile_id}
         result = await _profiles_post(body)
-        try:
-            parsed = json.loads(result)
-            if parsed.get("status") == "error":
-                return result
+        parsed = _parse_json_response(result)
+        if parsed.get("status") == "error":
+            return result
 
-            message = parsed.get("message", "")
-            if isinstance(message, str) and message.startswith("Opened profile screen"):
-                for _ in range(20):
-                    await asyncio.sleep(0.1)
-                    state_text = await _get({"format": "json"})
-                    state = json.loads(state_text)
-                    if state.get("menu_screen") == "profile_select":
-                        result = await _profiles_post(body)
-                        parsed = json.loads(result)
-                        if parsed.get("status") == "error":
-                            return result
-                        break
-            result = await _wait_for_profile(profile_id, result)
-        except json.JSONDecodeError:
-            pass
+        message = parsed.get("message", "")
+        if isinstance(message, str) and message.startswith("Opened profile screen"):
+            for _ in range(20):
+                await asyncio.sleep(0.1)
+                state_text = await _get({"format": "json"})
+                state = _parse_json_response(state_text)
+                if state.get("menu_screen") == "profile_select":
+                    result = await _profiles_post(body)
+                    parsed = _parse_json_response(result)
+                    if parsed.get("status") == "error":
+                        return result
+                    break
+        result = await _wait_for_profile(profile_id, result)
         return result
     except Exception as e:
         return _handle_error(e)
@@ -976,7 +996,9 @@ async def mp_rewards_pick_card(card_index: int) -> str:
         card_index: 0-based index of the card to add to the deck.
     """
     try:
-        return await _mp_post({"action": "select_card_reward", "card_index": card_index})
+        return await _mp_post(
+            {"action": "select_card_reward", "card_index": card_index}
+        )
     except Exception as e:
         return _handle_error(e)
 
@@ -998,6 +1020,91 @@ async def mp_proceed_to_map() -> str:
     """
     try:
         return await _mp_post({"action": "proceed"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_sl() -> str:
+    """[Multiplayer Run Control] Save and quit to the main menu, continue the multiplayer run, and wait until it is loaded again."""
+    try:
+        save_result_text = await _mp_post(
+            {"action": "save_and_quit_to_menu"}, timeout=75
+        )
+        save_result = _parse_json_response(save_result_text)
+        if save_result.get("status") == "error":
+            return save_result_text
+
+        last_state: dict | None = None
+        for _ in range(100):
+            try:
+                state = _parse_json_response(await _get({"format": "json"}))
+            except httpx.HTTPStatusError as e:
+                state = _http_error_state(e)
+            last_state = state
+            if state.get("state_type") == "menu":
+                if "continue" not in _option_names(state):
+                    return _json_response(
+                        "error",
+                        error="Reached menu, but continue is not available",
+                        state=state,
+                        save_result=save_result,
+                    )
+                break
+            await asyncio.sleep(0.1)
+        else:
+            return _json_response(
+                "error",
+                error="Timed out waiting for main menu after multiplayer save and quit",
+                last_state=last_state,
+                save_result=save_result,
+            )
+
+        continue_result_text = await menu_select("continue")
+        continue_result = _parse_json_response(continue_result_text)
+        if continue_result.get("status") == "error":
+            return continue_result_text
+
+        for _ in range(150):
+            try:
+                state = _parse_json_response(await _mp_get({"format": "json"}))
+                last_state = state
+                if _is_run_loaded_state(state):
+                    return _json_response(
+                        "ok",
+                        message="Saved and continued the multiplayer run",
+                        save_result=save_result,
+                        continue_result=continue_result,
+                        state=state,
+                    )
+            except httpx.HTTPStatusError as e:
+                last_state = _http_error_state(e)
+                if e.response.status_code != 409:
+                    raise
+
+                try:
+                    state = _parse_json_response(await _get({"format": "json"}))
+                    last_state = state
+                    if _is_run_loaded_state(state):
+                        return _json_response(
+                            "error",
+                            error="Continue loaded a non-multiplayer run",
+                            save_result=save_result,
+                            continue_result=continue_result,
+                            state=state,
+                        )
+                except httpx.HTTPStatusError as fallback_error:
+                    last_state = _http_error_state(fallback_error)
+
+            await asyncio.sleep(0.1)
+
+        return _json_response(
+            "error",
+            error="Timed out waiting for the multiplayer run to load after continue",
+            last_state=last_state,
+            save_result=save_result,
+            continue_result=continue_result,
+        )
     except Exception as e:
         return _handle_error(e)
 
@@ -1072,7 +1179,9 @@ async def mp_combat_select_card(card_index: int) -> str:
         card_index: 0-based index of the card in the selectable hand cards.
     """
     try:
-        return await _mp_post({"action": "combat_select_card", "card_index": card_index})
+        return await _mp_post(
+            {"action": "combat_select_card", "card_index": card_index}
+        )
     except Exception as e:
         return _handle_error(e)
 
@@ -1163,8 +1272,14 @@ async def mp_crystal_sphere_proceed() -> str:
 def main():
     parser = argparse.ArgumentParser(description="STS2 MCP Server")
     parser.add_argument("--port", type=int, default=15526, help="Game HTTP server port")
-    parser.add_argument("--host", type=str, default="localhost", help="Game HTTP server host")
-    parser.add_argument("--no-trust-env", action="store_true", help="Ignore HTTP_PROXY/HTTPS_PROXY environment variables")
+    parser.add_argument(
+        "--host", type=str, default="localhost", help="Game HTTP server host"
+    )
+    parser.add_argument(
+        "--no-trust-env",
+        action="store_true",
+        help="Ignore HTTP_PROXY/HTTPS_PROXY environment variables",
+    )
     args = parser.parse_args()
 
     global _base_url, _trust_env

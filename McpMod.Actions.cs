@@ -49,13 +49,13 @@ namespace STS2_MCP;
 
 public static partial class McpMod
 {
-    private static async Task<Dictionary<string, object?>> ExecuteSaveAndQuitToMenuAsync()
+    private static async Task<Dictionary<string, object?>> ExecuteSaveAndQuitToMenuAsync(bool allowMultiplayer = false)
     {
         var clickedSaveAndQuit = false;
 
         for (int attempt = 0; attempt < 600; attempt++)
         {
-            var result = await RunOnMainThread(() => AdvanceSaveAndQuitToMenu(clickedSaveAndQuit));
+            var result = await RunOnMainThread(() => AdvanceSaveAndQuitToMenu(clickedSaveAndQuit, allowMultiplayer));
             if (result.TryGetValue("status", out var status) &&
                 string.Equals(status?.ToString(), "error", System.StringComparison.Ordinal))
             {
@@ -77,7 +77,7 @@ public static partial class McpMod
         return Error("Timed out waiting for Save and Quit to return to the main menu");
     }
 
-    private static Dictionary<string, object?> AdvanceSaveAndQuitToMenu(bool clickedSaveAndQuit)
+    private static Dictionary<string, object?> AdvanceSaveAndQuitToMenu(bool clickedSaveAndQuit, bool allowMultiplayer)
     {
         var tree = Engine.GetMainLoop() as SceneTree;
         if (tree?.Root == null)
@@ -86,7 +86,7 @@ public static partial class McpMod
         if (!RunManager.Instance.IsInProgress)
         {
             if (!clickedSaveAndQuit)
-                return Error("No singleplayer run in progress");
+                return Error(allowMultiplayer ? "No run in progress" : "No singleplayer run in progress");
 
             var mainMenu = FindFirst<NMainMenu>(tree.Root);
             if (mainMenu != null && IsNodeVisible(mainMenu))
@@ -107,7 +107,7 @@ public static partial class McpMod
             };
         }
 
-        if (IsMultiplayerRun())
+        if (IsMultiplayerRun() && !allowMultiplayer)
             return Error("Cannot save/load a multiplayer run through singleplayer sl()");
 
         if (clickedSaveAndQuit)
@@ -200,7 +200,7 @@ public static partial class McpMod
     {
         if (!CombatManager.Instance.IsInProgress)
             return Error("Not in combat");
-        if (!CombatManager.Instance.IsPlayPhase)
+        if (!IsPlayPhase(player))
             return Error("Not in play phase - cannot act during enemy turn");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled");
@@ -255,7 +255,7 @@ public static partial class McpMod
     {
         if (!CombatManager.Instance.IsInProgress)
             return Error("Not in combat");
-        if (!CombatManager.Instance.IsPlayPhase)
+        if (!IsPlayPhase(player))
             return Error("Not in play phase - cannot act during enemy turn");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled (turn may already be ending)");
@@ -298,7 +298,7 @@ public static partial class McpMod
         {
             if (!inCombat)
                 return Error($"Potion '{SafeGetText(() => potion.Title)}' can only be used in combat");
-            if (!CombatManager.Instance.IsPlayPhase)
+            if (!IsPlayPhase(player))
                 return Error("Cannot use potions outside of play phase");
         }
         else if (potion.Usage == PotionUsage.Automatic)
@@ -467,7 +467,7 @@ public static partial class McpMod
             var merchUI = NMerchantRoom.Instance;
             if (merchUI?.Inventory != null && !merchUI.Inventory.IsOpen)
                 merchUI.OpenInventory();
-            inventory = merchantRoom.Inventory;
+            inventory = merchantRoom.GetLocalInventory();
         }
         else if (player.RunState.CurrentRoom is EventRoom eventRoom
                  && eventRoom.CanonicalEvent is FakeMerchant
@@ -1145,7 +1145,7 @@ public static partial class McpMod
         };
     }
 
-    private static Creature? ResolveTarget(CombatState combatState, string entityId)
+    private static Creature? ResolveTarget(ICombatState combatState, string entityId)
     {
         // Try to match by entity_id pattern: "model_entry_N"
         // First try matching by combat_id if it's a pure number
