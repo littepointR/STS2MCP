@@ -415,17 +415,17 @@ public static partial class McpMod
 
         string action = actionElem.GetString() ?? "";
 
-        // Handle menu actions separately (no run required)
-        if (action == "save_and_quit_to_menu")
+        if (action == "restart_combat")
         {
             try
             {
-                var result = ExecuteSaveAndQuitToMenuAsync().GetAwaiter().GetResult();
+                var restartTask = RunOnMainThread(ExecuteRestartCombatAsync).GetAwaiter().GetResult();
+                var result = restartTask.GetAwaiter().GetResult();
                 SendJson(response, result);
             }
             catch (Exception ex)
             {
-                SendError(response, 500, $"Save and quit failed: {ex.Message}");
+                SendError(response, 500, $"Combat restart failed: {ex.Message}");
             }
             return;
         }

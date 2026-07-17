@@ -6,7 +6,7 @@
 |---|---|---|
 | `get_game_state(format?)` | General | Get current game state (`markdown` or `json`) |
 | `menu_select(option, seed?)` | General | Select a visible menu/game-over option |
-| `sl()` | General | Save and quit to menu, continue, and wait for the run to reload |
+| `sl()` | Combat | Restart the current singleplayer combat from the room autosave |
 | `get_profile()` | Profiles | Get active profile progress |
 | `list_profiles()` | Profiles | List profile slots and active slot |
 | `switch_profile(profile_id)` | Profiles | Switch to a profile slot through the game UI |

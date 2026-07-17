@@ -57,7 +57,7 @@ All POST requests use JSON body with `"action"` field. All responses include `{ 
 | Action | Parameters | When to Use |
 |---|---|---|
 | `menu_select` | `option`: string, `seed`?: string | Choose an advertised menu option. Options are case-insensitive. Submenus include `back` where visible, including `profile_select` options `profile_1`, `profile_2`, `profile_3`, and `back`. Blocking popups expose normalized button labels such as `ignore` or `back`. `game_over` supports `main_menu` only; `continue` returns an error. Supplying `seed` in unsupported contexts such as standard singleplayer character select returns an error and does not start a run. If Timeline has pending obtained epochs that require manual reveal, it may appear in `blocked_options`; selecting `timeline` returns `manual_action_required: true` with `pending_epoch_ids` instead of opening Timeline. |
-| `save_and_quit_to_menu` | _(none)_ | Internal action used by the MCP `sl()` tool. Saves a singleplayer run, quits to main menu, and stops there. Rejects multiplayer runs. |
+| `restart_combat` | _(none)_ | Internal action used by the MCP `sl()` tool. Reloads the current singleplayer combat from the room autosave. Rejects non-combat and multiplayer runs. |
 
 ### Profiles
 

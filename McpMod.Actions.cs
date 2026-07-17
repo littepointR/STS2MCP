@@ -2,6 +2,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using MegaCrit.Sts2.Core.Multiplayer;
+using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Audio;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
@@ -34,111 +37,63 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Potions;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline;
 using MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen;
-using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
-using MegaCrit.Sts2.Core.Nodes.TopBar;
 using Godot;
 
 namespace STS2_MCP;
 
 public static partial class McpMod
 {
-    private static async Task<Dictionary<string, object?>> ExecuteSaveAndQuitToMenuAsync()
+    private static async Task<Dictionary<string, object?>> ExecuteRestartCombatAsync()
     {
-        var clickedSaveAndQuit = false;
-
-        for (int attempt = 0; attempt < 100; attempt++)
-        {
-            var result = await RunOnMainThread(() => AdvanceSaveAndQuitToMenu(clickedSaveAndQuit));
-            if (result.TryGetValue("status", out var status) && string.Equals(status?.ToString(), "error", System.StringComparison.Ordinal))
-                return result;
-
-            if (result.TryGetValue("done", out var done) && done is true)
-                return result;
-
-            if (result.TryGetValue("phase", out var phase) &&
-                string.Equals(phase?.ToString(), "clicked_save_and_quit", System.StringComparison.Ordinal))
-            {
-                clickedSaveAndQuit = true;
-            }
-
-            await Task.Delay(100);
-        }
-
-        return Error("Timed out waiting for Save and Quit to return to the main menu");
-    }
-
-    private static Dictionary<string, object?> AdvanceSaveAndQuitToMenu(bool clickedSaveAndQuit)
-    {
-        var tree = Engine.GetMainLoop() as SceneTree;
-        if (tree?.Root == null)
-            return Error("Cannot access scene tree");
-
-        if (!RunManager.Instance.IsInProgress)
-        {
-            var mainMenu = FindFirst<NMainMenu>(tree.Root);
-            if (mainMenu != null && IsNodeVisible(mainMenu))
-            {
-                return new Dictionary<string, object?>
-                {
-                    ["status"] = "ok",
-                    ["message"] = "Saved and returned to main menu",
-                    ["done"] = true
-                };
-            }
-
-            return new Dictionary<string, object?>
-            {
-                ["status"] = "ok",
-                ["message"] = "Run stopped; waiting for main menu",
-                ["phase"] = "waiting_for_main_menu"
-            };
-        }
+        if (!RunManager.Instance.IsInProgress || !CombatManager.Instance.IsInProgress)
+            return Error("SL is only available during combat");
 
         if (IsMultiplayerRun())
-            return Error("Cannot save/load a multiplayer run through singleplayer sl()");
+            return Error("Cannot restart a multiplayer combat through singleplayer sl()");
 
-        if (clickedSaveAndQuit)
+        var game = NGame.Instance;
+        if (game == null)
+            return Error("Game instance is not available");
+
+        var loadResult = SaveManager.Instance.LoadRunSave();
+        if (!loadResult.Success || loadResult.SaveData == null)
+            return Error($"Could not load the combat autosave: {loadResult.Status}");
+
+        var serializableRun = loadResult.SaveData;
+        var runState = RunState.FromSerializable(serializableRun);
+
+        RunManager.Instance.ActionQueueSet.Reset();
+        NRunMusicController.Instance?.StopMusic();
+        NAudioManager.Instance?.StopMusic();
+
+        var fadedOut = false;
+        try
         {
+            await game.Transition.FadeOut();
+            fadedOut = true;
+
+            RunManager.Instance.CleanUp(graceful: true);
+            await RunManager.Instance.SetUpSavedSingleplayer(runState, serializableRun);
+            game.ReactionContainer.InitializeNetworking(new NetSingleplayerGameService());
+            await game.LoadRun(runState, serializableRun.PreFinishedRoom);
+
             return new Dictionary<string, object?>
             {
                 ["status"] = "ok",
-                ["message"] = "Waiting for Save and Quit to finish",
-                ["phase"] = "waiting_for_main_menu"
+                ["message"] = "Restarted the current combat from its autosave"
             };
         }
-
-        var pauseMenu = FindAll<NPauseMenu>(tree.Root).FirstOrDefault(IsNodeVisible);
-        if (pauseMenu == null)
+        finally
         {
-            var pauseButton = FindFirst<NTopBarPauseButton>(tree.Root);
-            if (!IsControlVisibleOrActionable(pauseButton))
-                return Error("Pause button is not available; cannot open Save and Quit");
-
-            pauseButton!.ForceClick();
-            return new Dictionary<string, object?>
-            {
-                ["status"] = "ok",
-                ["message"] = "Opening pause menu",
-                ["phase"] = "opening_pause_menu"
-            };
+            if (fadedOut)
+                await game.Transition.FadeIn();
         }
-
-        var saveAndQuitButton = GetInstanceFieldValue(pauseMenu, "_saveAndQuitButton") as NClickableControl;
-        if (!IsControlVisibleOrActionable(saveAndQuitButton))
-            return Error("Save and Quit button is not available");
-
-        saveAndQuitButton!.ForceClick();
-        return new Dictionary<string, object?>
-        {
-            ["status"] = "ok",
-            ["message"] = "Clicked Save and Quit",
-            ["phase"] = "clicked_save_and_quit"
-        };
     }
 
     private static Dictionary<string, object?> ExecuteAction(string action, Dictionary<string, JsonElement> data)
@@ -192,7 +147,7 @@ public static partial class McpMod
     {
         if (!CombatManager.Instance.IsInProgress)
             return Error("Not in combat");
-        if (!CombatManager.Instance.IsPlayPhase)
+        if (player.PlayerCombatState?.Phase != PlayerTurnPhase.Play)
             return Error("Not in play phase - cannot act during enemy turn");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled");
@@ -247,7 +202,7 @@ public static partial class McpMod
     {
         if (!CombatManager.Instance.IsInProgress)
             return Error("Not in combat");
-        if (!CombatManager.Instance.IsPlayPhase)
+        if (player.PlayerCombatState?.Phase != PlayerTurnPhase.Play)
             return Error("Not in play phase - cannot act during enemy turn");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled (turn may already be ending)");
@@ -290,7 +245,7 @@ public static partial class McpMod
         {
             if (!inCombat)
                 return Error($"Potion '{SafeGetText(() => potion.Title)}' can only be used in combat");
-            if (!CombatManager.Instance.IsPlayPhase)
+            if (player.PlayerCombatState?.Phase != PlayerTurnPhase.Play)
                 return Error("Cannot use potions outside of play phase");
         }
         else if (potion.Usage == PotionUsage.Automatic)
@@ -459,7 +414,7 @@ public static partial class McpMod
             var merchUI = NMerchantRoom.Instance;
             if (merchUI?.Inventory != null && !merchUI.Inventory.IsOpen)
                 merchUI.OpenInventory();
-            inventory = merchantRoom.Inventory;
+            inventory = merchantRoom.GetLocalInventory();
         }
         else if (player.RunState.CurrentRoom is EventRoom eventRoom
                  && eventRoom.CanonicalEvent is FakeMerchant
@@ -1137,7 +1092,7 @@ public static partial class McpMod
         };
     }
 
-    private static Creature? ResolveTarget(CombatState combatState, string entityId)
+    private static Creature? ResolveTarget(ICombatState combatState, string entityId)
     {
         // Try to match by entity_id pattern: "model_entry_N"
         // First try matching by combat_id if it's a pure number

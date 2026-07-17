@@ -5,10 +5,10 @@ as MCP tools for Claude Desktop / Claude Code.
 """
 
 import argparse
-import asyncio
 import json
 import sys
 
+import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
 
@@ -86,7 +86,7 @@ async def _profiles_post(body: dict) -> str:
 async def _wait_for_profile(profile_id: int, fallback: str) -> str:
     last_profiles: dict | None = None
     for _ in range(30):
-        await asyncio.sleep(0.1)
+        await anyio.sleep(0.1)
         profiles_text = await _profiles_get()
         profiles = json.loads(profiles_text)
         last_profiles = profiles
@@ -132,21 +132,6 @@ def _parse_json_response(text: str) -> dict:
     except json.JSONDecodeError:
         return {"status": "error", "error": "Response was not JSON", "raw_response": text}
     return parsed if isinstance(parsed, dict) else {"status": "error", "error": "Response was not an object", "raw_response": parsed}
-
-
-def _option_names(state: dict) -> set[str]:
-    options = state.get("options", [])
-    names: set[str] = set()
-    if isinstance(options, list):
-        for option in options:
-            if isinstance(option, str):
-                names.add(option.lower())
-            elif isinstance(option, dict):
-                name = option.get("name")
-                enabled = option.get("enabled", True)
-                if isinstance(name, str) and enabled is not False:
-                    names.add(name.lower())
-    return names
 
 
 def _handle_error(e: Exception) -> str:
@@ -248,7 +233,7 @@ async def switch_profile(profile_id: int) -> str:
             message = parsed.get("message", "")
             if isinstance(message, str) and message.startswith("Opened profile screen"):
                 for _ in range(20):
-                    await asyncio.sleep(0.1)
+                    await anyio.sleep(0.1)
                     state_text = await _get({"format": "json"})
                     state = json.loads(state_text)
                     if state.get("menu_screen") == "profile_select":
@@ -267,59 +252,40 @@ async def switch_profile(profile_id: int) -> str:
 
 @mcp.tool()
 async def sl() -> str:
-    """[Run Control] Save and quit to the main menu, continue the run, and wait until the run is loaded again."""
+    """[Combat] Restart the current singleplayer combat from its room autosave."""
     try:
-        save_result_text = await _post({"action": "save_and_quit_to_menu"})
-        save_result = _parse_json_response(save_result_text)
-        if save_result.get("status") == "error":
-            return save_result_text
-
-        last_state: dict | None = None
-        for _ in range(100):
-            state = _parse_json_response(await _get({"format": "json"}))
-            last_state = state
-            if state.get("state_type") == "menu":
-                if "continue" not in _option_names(state):
-                    return _json_response(
-                        "error",
-                        error="Reached menu, but continue is not available",
-                        state=state,
-                        save_result=save_result,
-                    )
-                break
-            await asyncio.sleep(0.1)
-        else:
+        initial_state = _parse_json_response(await _get({"format": "json"}))
+        if not isinstance(initial_state.get("battle"), dict):
             return _json_response(
                 "error",
-                error="Timed out waiting for main menu after save and quit",
-                last_state=last_state,
-                save_result=save_result,
+                error="SL is only available during combat",
+                state=initial_state,
             )
 
-        continue_result_text = await menu_select("continue")
-        continue_result = _parse_json_response(continue_result_text)
-        if continue_result.get("status") == "error":
-            return continue_result_text
+        restart_result_text = await _post({"action": "restart_combat"})
+        restart_result = _parse_json_response(restart_result_text)
+        if restart_result.get("status") == "error":
+            return restart_result_text
 
+        last_state: dict | None = None
         for _ in range(150):
             state = _parse_json_response(await _get({"format": "json"}))
             last_state = state
-            if state.get("state_type") != "menu":
+            battle = state.get("battle")
+            if isinstance(battle, dict) and battle.get("is_play_phase") is True:
                 return _json_response(
                     "ok",
-                    message="Saved and continued the run",
-                    save_result=save_result,
-                    continue_result=continue_result,
+                    message="Restarted the current combat",
+                    restart_result=restart_result,
                     state=state,
                 )
-            await asyncio.sleep(0.1)
+            await anyio.sleep(0.1)
 
         return _json_response(
             "error",
-            error="Timed out waiting for the run to load after continue",
+            error="Timed out waiting for combat to restart from the autosave",
             last_state=last_state,
-            save_result=save_result,
-            continue_result=continue_result,
+            restart_result=restart_result,
         )
     except Exception as e:
         return _handle_error(e)

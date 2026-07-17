@@ -830,12 +830,12 @@ If `timeline` is blocked by pending obtained epochs, `menu_select` returns an er
 
 ---
 
-### `save_and_quit_to_menu`
+### `restart_combat`
 
-Internal action used by the MCP `sl()` tool. It saves a singleplayer run, quits to the main menu, and stops there; use `menu_select` with `continue` to load the run again.
+Internal action used by the MCP `sl()` tool. During a singleplayer combat, it reloads the room autosave through the game's saved-run setup and load flow. Non-combat and multiplayer runs are rejected.
 
 ```json
-{ "action": "save_and_quit_to_menu" }
+{ "action": "restart_combat" }
 ```
 
 This action rejects multiplayer runs.
