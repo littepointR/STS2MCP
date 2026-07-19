@@ -21,11 +21,13 @@ public static partial class McpMod
 {
     public const string Version = "0.3.4";
     public const int DefaultPort = 15526;
+    internal const int MainThreadRequestTimeoutMilliseconds = 8000;
     private const string ConfigFileName = "STS2_MCP.conf";
 
     private static HttpListener? _listener;
     private static Thread? _serverThread;
-    private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
+    private static readonly ConcurrentQueue<MainThreadWorkItem> _mainThreadQueue = new();
+    private static int _mainThreadWorkInFlight;
     internal static readonly JsonSerializerOptions _jsonOptions = new()
     {
         WriteIndented = true,
@@ -124,37 +126,146 @@ public static partial class McpMod
         }
     }
 
-    private static void ProcessMainThreadQueue()
+    private sealed class MainThreadWorkItem
     {
-        int processed = 0;
-        while (_mainThreadQueue.TryDequeue(out var action) && processed < 10)
+        private readonly Action _action;
+        private readonly Action _onSkipped;
+        private int _state;
+
+        public MainThreadWorkItem(Action action, Action onSkipped)
         {
-            try { action(); }
-            catch (Exception ex) { GD.PrintErr($"[STS2 MCP] Main thread action error: {ex}"); }
-            processed++;
+            _action = action;
+            _onSkipped = onSkipped;
+        }
+
+        public void Cancel() => Interlocked.CompareExchange(ref _state, 2, 0);
+
+        public bool TryExecute()
+        {
+            if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
+            {
+                _onSkipped();
+                return false;
+            }
+
+            _action();
+            Volatile.Write(ref _state, 3);
+            return true;
         }
     }
 
-    internal static Task<T> RunOnMainThread<T>(Func<T> func)
+    internal sealed class MainThreadRequestTimeoutException : TimeoutException
     {
-        var tcs = new TaskCompletionSource<T>();
-        _mainThreadQueue.Enqueue(() =>
+        public MainThreadRequestTimeoutException()
+            : base($"Main-thread request timed out after {MainThreadRequestTimeoutMilliseconds} ms") { }
+    }
+
+    internal sealed class MainThreadRequestBusyException : InvalidOperationException
+    {
+        public MainThreadRequestBusyException()
+            : base("Another main-thread request is still running") { }
+    }
+
+    private static void ProcessMainThreadQueue()
+    {
+        int processed = 0;
+        while (processed < 10 && _mainThreadQueue.TryDequeue(out var workItem))
+        {
+            try { if (workItem.TryExecute()) processed++; }
+            catch (Exception ex) { GD.PrintErr($"[STS2 MCP] Main thread action error: {ex}"); }
+        }
+    }
+
+    private static MainThreadWorkItem EnqueueMainThreadWork(Action action)
+    {
+        if (Interlocked.CompareExchange(ref _mainThreadWorkInFlight, 1, 0) != 0)
+            throw new MainThreadRequestBusyException();
+
+        var workItem = new MainThreadWorkItem(action, ReleaseMainThreadWork);
+        _mainThreadQueue.Enqueue(workItem);
+        return workItem;
+    }
+
+    private static void ReleaseMainThreadWork()
+    {
+        Volatile.Write(ref _mainThreadWorkInFlight, 0);
+    }
+
+    private static T WaitForMainThread<T>(Task<T> task, MainThreadWorkItem workItem)
+    {
+        using var timeout = new CancellationTokenSource();
+        var timeoutTask = Task.Delay(MainThreadRequestTimeoutMilliseconds, timeout.Token);
+        var completedTask = Task.WhenAny(task, timeoutTask).GetAwaiter().GetResult();
+        if (!ReferenceEquals(completedTask, task))
+        {
+            workItem.Cancel();
+            throw new MainThreadRequestTimeoutException();
+        }
+
+        timeout.Cancel();
+        return task.GetAwaiter().GetResult();
+    }
+
+    internal static T RunOnMainThreadAndWait<T>(Func<T> func)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var workItem = EnqueueMainThreadWork(() =>
         {
             try { tcs.SetResult(func()); }
             catch (Exception ex) { tcs.SetException(ex); }
+            finally { ReleaseMainThreadWork(); }
         });
-        return tcs.Task;
+        return WaitForMainThread(tcs.Task, workItem);
     }
 
-    internal static Task RunOnMainThread(Action action)
+    internal static T RunOnMainThreadAndWaitAsync<T>(Func<Task<T>> func)
     {
-        var tcs = new TaskCompletionSource<bool>();
-        _mainThreadQueue.Enqueue(() =>
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var workItem = EnqueueMainThreadWork(() =>
         {
-            try { action(); tcs.SetResult(true); }
-            catch (Exception ex) { tcs.SetException(ex); }
+            Task<T> asyncTask;
+            try
+            {
+                asyncTask = func();
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+                ReleaseMainThreadWork();
+                return;
+            }
+
+            _ = asyncTask.ContinueWith(
+                completed =>
+                {
+                    try
+                    {
+                        if (completed.IsCanceled)
+                            tcs.TrySetCanceled();
+                        else if (completed.IsFaulted)
+                            tcs.TrySetException(completed.Exception!.InnerExceptions);
+                        else
+                            tcs.TrySetResult(completed.Result);
+                    }
+                    finally
+                    {
+                        ReleaseMainThreadWork();
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         });
-        return tcs.Task;
+        return WaitForMainThread(tcs.Task, workItem);
+    }
+
+    internal static void RunOnMainThreadAndWait(Action action)
+    {
+        RunOnMainThreadAndWait(() =>
+        {
+            action();
+            return true;
+        });
     }
 
     private static void ServerLoop()
@@ -280,8 +391,7 @@ public static partial class McpMod
 
         try
         {
-            var stateTask = RunOnMainThread(() => BuildMultiplayerGameState());
-            var state = stateTask.GetAwaiter().GetResult();
+            var state = RunOnMainThreadAndWait(() => BuildMultiplayerGameState());
 
             if (format == "markdown")
             {
@@ -298,13 +408,7 @@ public static partial class McpMod
             GD.PrintErr($"[STS2 MCP] HandleGetMultiplayerState: {ex}");
             try
             {
-                response.StatusCode = 500;
-                SendJson(response, new Dictionary<string, object?>
-                {
-                    ["error"] = $"Failed to read multiplayer game state: {ex.Message}",
-                    ["exception_type"] = ex.GetType().FullName,
-                    ["stack_trace"] = ex.StackTrace
-                });
+                SendError(response, 500, $"Failed to read multiplayer game state: {ex.Message}", ex);
             }
             catch { /* response may be unusable */ }
         }
@@ -337,13 +441,12 @@ public static partial class McpMod
 
         try
         {
-            var resultTask = RunOnMainThread(() => ExecuteMultiplayerAction(action, parsed));
-            var result = resultTask.GetAwaiter().GetResult();
+            var result = RunOnMainThreadAndWait(() => ExecuteMultiplayerAction(action, parsed));
             SendJson(response, result);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Multiplayer action failed: {ex.Message}");
+            SendError(response, 500, $"Multiplayer action failed: {ex.Message}", ex);
         }
     }
 
@@ -353,8 +456,7 @@ public static partial class McpMod
 
         try
         {
-            var stateTask = RunOnMainThread(() => BuildGameState());
-            var state = stateTask.GetAwaiter().GetResult();
+            var state = RunOnMainThreadAndWait(() => BuildGameState());
 
             if (format == "markdown")
             {
@@ -378,13 +480,7 @@ public static partial class McpMod
             GD.PrintErr($"[STS2 MCP] HandleGetState: {ex}");
             try
             {
-                response.StatusCode = 500;
-                SendJson(response, new Dictionary<string, object?>
-                {
-                    ["error"] = $"Failed to read game state: {ex.Message}",
-                    ["exception_type"] = ex.GetType().FullName,
-                    ["stack_trace"] = ex.StackTrace
-                });
+                SendError(response, 500, $"Failed to read game state: {ex.Message}", ex);
             }
             catch { /* response may be unusable */ }
         }
@@ -419,13 +515,26 @@ public static partial class McpMod
         {
             try
             {
-                var restartTask = RunOnMainThread(ExecuteRestartCombatAsync).GetAwaiter().GetResult();
-                var result = restartTask.GetAwaiter().GetResult();
+                var result = RunOnMainThreadAndWaitAsync(ExecuteRestartCombatAsync);
                 SendJson(response, result);
             }
             catch (Exception ex)
             {
-                SendError(response, 500, $"Combat restart failed: {ex.Message}");
+                SendError(response, 500, $"Combat restart failed: {ex.Message}", ex);
+            }
+            return;
+        }
+
+        if (action == "resolve_pending_epochs")
+        {
+            try
+            {
+                var result = RunOnMainThreadAndWait(ExecuteResolvePendingEpochs);
+                SendJson(response, result);
+            }
+            catch (Exception ex)
+            {
+                SendError(response, 500, $"Profile initialization failed: {ex.Message}", ex);
             }
             return;
         }
@@ -436,26 +545,24 @@ public static partial class McpMod
             {
                 var option = parsed.TryGetValue("option", out var optElem) ? optElem.GetString() ?? "" : "";
                 var seed = parsed.TryGetValue("seed", out var seedElem) ? seedElem.GetString() : null;
-                var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed));
-                var result = resultTask.GetAwaiter().GetResult();
+                var result = RunOnMainThreadAndWait(() => ExecuteMenuSelect(option, seed));
                 SendJson(response, result);
             }
             catch (Exception ex)
             {
-                SendError(response, 500, $"Menu action failed: {ex.Message}");
+                SendError(response, 500, $"Menu action failed: {ex.Message}", ex);
             }
             return;
         }
 
         try
         {
-            var resultTask = RunOnMainThread(() => ExecuteAction(action, parsed));
-            var result = resultTask.GetAwaiter().GetResult();
+            var result = RunOnMainThreadAndWait(() => ExecuteAction(action, parsed));
             SendJson(response, result);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Action failed: {ex.Message}");
+            SendError(response, 500, $"Action failed: {ex.Message}", ex);
         }
     }
 }

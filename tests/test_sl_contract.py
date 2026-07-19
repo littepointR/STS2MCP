@@ -127,3 +127,35 @@ class StaticContractTest(unittest.TestCase):
 
         self.assertNotIn("async def delete_profile", server)
         self.assertNotIn("delete_profile", readme)
+
+
+class BridgeFailureContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = load_server_module()
+
+    def test_empty_transport_errors_keep_exception_type_and_diagnostic_context(self):
+        for error in (
+            self.server.httpx.ReadError(""),
+            self.server.httpx.ReadTimeout(""),
+            TimeoutError(),
+        ):
+            rendered = self.server._handle_error(error)
+            self.assertIn(type(error).__name__, rendered)
+            self.assertRegex(rendered, r"detail=\S+")
+
+    def test_csharp_main_thread_wait_has_a_bound_and_busy_guard(self):
+        source = (ROOT / "McpMod.cs").read_text(encoding="utf-8-sig")
+
+        self.assertIn("MainThreadRequestTimeoutException", source)
+        self.assertIn("MainThreadRequestBusyException", source)
+        self.assertIn("MainThreadRequestTimeoutMilliseconds", source)
+        self.assertIn("RunOnMainThreadAndWait", source)
+        self.assertIn(
+            "RunOnMainThreadAndWaitAsync(ExecuteRestartCombatAsync)",
+            source,
+        )
+        self.assertNotRegex(
+            source,
+            r"RunOnMainThread\([^\n]+\)\.GetAwaiter\(\)\.GetResult\(\)",
+        )

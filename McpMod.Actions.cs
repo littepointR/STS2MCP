@@ -96,6 +96,80 @@ public static partial class McpMod
         }
     }
 
+    private static Dictionary<string, object?> ExecuteResolvePendingEpochs()
+    {
+        var tree = Engine.GetMainLoop() as SceneTree;
+        if (tree?.Root == null)
+            return Error("Cannot access scene tree");
+
+        var pendingEpochIds = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
+        var timelineScreen = FindFirst<NTimelineScreen>(tree.Root);
+        if (timelineScreen != null && IsNodeVisible(timelineScreen))
+        {
+            if (pendingEpochIds.Count == 0)
+            {
+                var backResult = ExecuteMenuSelect("back");
+                backResult["phase"] = "returning_to_main_menu";
+                backResult["pending_epoch_ids"] = pendingEpochIds;
+                return backResult;
+            }
+
+            var result = ExecuteMenuSelect("advance");
+            if (result.TryGetValue("status", out var status) &&
+                string.Equals(status?.ToString(), "error", System.StringComparison.Ordinal))
+            {
+                return result;
+            }
+
+            pendingEpochIds = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
+            if (result.TryGetValue("done", out var done) && done is true && pendingEpochIds.Count == 0)
+            {
+                var backResult = ExecuteMenuSelect("back");
+                backResult["phase"] = "returning_to_main_menu";
+                backResult["pending_epoch_ids"] = pendingEpochIds;
+                return backResult;
+            }
+
+            result["phase"] = "advancing_timeline";
+            result["pending_epoch_ids"] = pendingEpochIds;
+            return result;
+        }
+
+        var mainMenu = FindFirst<NMainMenu>(tree.Root);
+        if (mainMenu != null && IsNodeVisible(mainMenu))
+        {
+            if (pendingEpochIds.Count == 0)
+            {
+                return new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = "Profile initialization is complete",
+                    ["phase"] = "ready",
+                    ["ready"] = true,
+                    ["pending_epoch_ids"] = pendingEpochIds
+                };
+            }
+
+            var result = ClickMenuButtonField(
+                mainMenu,
+                "_timelineButton",
+                "Opening Timeline to reveal pending epochs",
+                "Timeline button is not available");
+            result["phase"] = "opening_timeline";
+            result["pending_epoch_ids"] = pendingEpochIds;
+            return result;
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = "Waiting for Timeline or main menu",
+            ["phase"] = "waiting_for_menu",
+            ["retry"] = true,
+            ["pending_epoch_ids"] = pendingEpochIds
+        };
+    }
+
     private static Dictionary<string, object?> ExecuteAction(string action, Dictionary<string, JsonElement> data)
     {
         if (!RunManager.Instance.IsInProgress)
@@ -1264,8 +1338,12 @@ public static partial class McpMod
                         closeClickable.ForceClick();
                         return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "Closed epoch inspect screen" };
                     }
-                    inspectScreen.Close();
-                    return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "Closed epoch inspect screen" };
+                    return new Dictionary<string, object?>
+                    {
+                        ["status"] = "ok",
+                        ["message"] = "Waiting for epoch inspect animation to finish",
+                        ["retry"] = true
+                    };
                 }
 
                 // Check for queued unlock screens.
@@ -1275,14 +1353,7 @@ public static partial class McpMod
 
                 var unrevealedEpochs = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
                 if (unrevealedEpochs.Count > 0)
-                    return new Dictionary<string, object?>
-                    {
-                        ["status"] = "ok",
-                        ["message"] = "Epoch unlocks are obtained but not revealed; not forcing timeline reveal from automation",
-                        ["pending_epoch_ids"] = unrevealedEpochs,
-                        ["manual_action_required"] = true,
-                        ["done"] = true
-                    };
+                    return TryRevealPendingTimelineEpoch(timelineScreen, unrevealedEpochs);
 
                 return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "No more epochs to advance", ["done"] = true };
             }
@@ -1489,6 +1560,43 @@ public static partial class McpMod
         return Error($"Unknown profile select option: {option}. Use: profile_1, profile_2, profile_3, back");
     }
 
+    private static Dictionary<string, object?> TryRevealPendingTimelineEpoch(
+        NTimelineScreen timelineScreen,
+        List<string> pendingEpochIds)
+    {
+        var pendingEpochIdSet = new HashSet<string>(
+            pendingEpochIds,
+            System.StringComparer.OrdinalIgnoreCase);
+        var slot = FindAll<NEpochSlot>(timelineScreen)
+            .FirstOrDefault(slot =>
+                slot.State == EpochSlotState.Obtained &&
+                slot.HasSpawned &&
+                slot.model != null &&
+                pendingEpochIdSet.Contains(slot.model.Id) &&
+                slot.IsEnabled &&
+                IsNodeVisible(slot));
+
+        if (slot == null)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = "Waiting for an obtained Epoch slot to become actionable",
+                ["pending_epoch_ids"] = pendingEpochIds,
+                ["retry"] = true
+            };
+        }
+
+        var epochId = slot.model.Id;
+        slot.ForceClick();
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Revealing Epoch {epochId}",
+            ["pending_epoch_ids"] = pendingEpochIds
+        };
+    }
+
     private static Dictionary<string, object?> ExecuteCharacterSelectMenuOption(
         NCharacterSelectScreen charSelect,
         string option,
@@ -1601,19 +1709,6 @@ public static partial class McpMod
             };
         }
 
-        if (string.Equals(queuedType, "NUnlockTimelineScreen", System.StringComparison.Ordinal) &&
-            IsTimelineScreenBusy(timelineScreen))
-        {
-            return new Dictionary<string, object?>
-            {
-                ["status"] = "ok",
-                ["message"] = "Timeline expansion is queued, but the timeline is still animating; retry after the next state poll",
-                ["queued_unlock_type"] = queuedType,
-                ["pending_epoch_ids"] = queuedEpochIds,
-                ["retry"] = true
-            };
-        }
-
         try
         {
             timelineScreen.OpenQueuedScreen();
@@ -1665,26 +1760,6 @@ public static partial class McpMod
         {
             return null;
         }
-    }
-
-    private static bool IsTimelineScreenBusy(NTimelineScreen timelineScreen)
-    {
-        try
-        {
-            var isUiVisible = GetInstanceFieldValue(timelineScreen, "_isUiVisible") as bool?;
-            if (isUiVisible == false)
-                return true;
-
-            var inputBlocker = GetInstanceFieldValue(timelineScreen, "_inputBlocker") as Control;
-            if (inputBlocker != null && IsNodeVisible(inputBlocker))
-                return true;
-        }
-        catch (System.ObjectDisposedException)
-        {
-            return true;
-        }
-
-        return false;
     }
 
     private static List<string> GetQueuedTimelineEpochIds(object? queuedScreen)

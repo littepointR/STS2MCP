@@ -329,6 +329,7 @@ public static partial class McpMod
                                                 ["name"] = "timeline",
                                                 ["enabled"] = false,
                                                 ["reason"] = "manual_epoch_reveal_required",
+                                                ["next_action"] = "initialize_profile",
                                                 ["pending_epoch_ids"] = unrevealedEpochs
                                             });
                                             continue;

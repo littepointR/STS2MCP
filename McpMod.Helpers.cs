@@ -89,10 +89,35 @@ public static partial class McpMod
         response.Close();
     }
 
-    internal static void SendError(HttpListenerResponse response, int statusCode, string message)
+    internal static void SendError(
+        HttpListenerResponse response,
+        int statusCode,
+        string message,
+        Exception? exception = null)
     {
+        var payload = new Dictionary<string, object?> { ["error"] = message };
+        if (exception is MainThreadRequestBusyException)
+        {
+            statusCode = 409;
+            payload["error_code"] = "main_thread_busy";
+        }
+        else if (exception is MainThreadRequestTimeoutException)
+        {
+            statusCode = 504;
+            payload["error_code"] = "main_thread_timeout";
+            payload["timeout_ms"] = MainThreadRequestTimeoutMilliseconds;
+        }
+
+        if (exception != null)
+        {
+            payload["exception_type"] = exception.GetType().FullName;
+            payload["detail"] = string.IsNullOrWhiteSpace(exception.Message)
+                ? "no message provided"
+                : exception.Message;
+        }
+
         response.StatusCode = statusCode;
-        SendJson(response, new Dictionary<string, object?> { ["error"] = message });
+        SendJson(response, payload);
     }
 
     private static Dictionary<string, object?> Error(string message)

@@ -6,7 +6,6 @@ as MCP tools for Claude Desktop / Claude Code.
 
 import argparse
 import json
-import sys
 
 import anyio
 import httpx
@@ -16,6 +15,7 @@ mcp = FastMCP("sts2")
 
 _base_url: str = "http://localhost:15526"
 _trust_env: bool = True
+PROFILE_INITIALIZATION_TIMEOUT_SECONDS = 120.0
 
 
 def _sp_url() -> str:
@@ -134,12 +134,30 @@ def _parse_json_response(text: str) -> dict:
     return parsed if isinstance(parsed, dict) else {"status": "error", "error": "Response was not an object", "raw_response": parsed}
 
 
+def _exception_context(e: Exception) -> tuple[str, str]:
+    exception_type = f"{type(e).__module__}.{type(e).__qualname__}"
+    detail = str(e).strip() or repr(e).strip()
+    detail = " ".join(detail.split())
+    if not detail:
+        detail = "no message provided"
+    return exception_type, detail
+
+
 def _handle_error(e: Exception) -> str:
+    exception_type, detail = _exception_context(e)
     if isinstance(e, httpx.ConnectError):
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    if isinstance(e, httpx.HTTPStatusError):
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
-    return f"Error: {e}"
+        message = "Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
+    elif isinstance(e, httpx.TimeoutException):
+        message = "STS2_MCP mod request timed out"
+    elif isinstance(e, httpx.TransportError):
+        message = "STS2_MCP mod transport failed"
+    elif isinstance(e, httpx.HTTPStatusError):
+        message = f"HTTP {e.response.status_code} — {e.response.text}"
+    elif isinstance(e, TimeoutError):
+        message = "STS2_MCP MCP operation timed out"
+    else:
+        message = str(e).strip() or "STS2_MCP MCP operation failed"
+    return f"Error: {message} [{exception_type}; detail={detail}]"
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +203,75 @@ async def menu_select(option: str, seed: str | None = None) -> str:
         return await _post(body)
     except Exception as e:
         return _handle_error(e)
+
+
+@mcp.tool()
+async def initialize_profile() -> str:
+    """Reveal pending Timeline epochs and return to a playable main menu.
+
+    Use this on fresh profiles or after unlocks when get_game_state reports a
+    blocked Timeline option with next_action set to initialize_profile. The
+    workflow uses the game's native UI and is safe to call again when ready.
+    """
+    try:
+        last_state: dict | None = None
+        last_action_result: dict | None = None
+        with anyio.fail_after(PROFILE_INITIALIZATION_TIMEOUT_SECONDS):
+            for _ in range(600):
+                state = _parse_json_response(await _get({"format": "json"}))
+                last_state = state
+                options = state.get("options")
+                if (
+                    state.get("state_type") == "menu"
+                    and state.get("menu_screen") == "main"
+                    and isinstance(options, list)
+                    and "singleplayer" in options
+                ):
+                    return _json_response(
+                        "ok",
+                        message="Profile initialization is complete",
+                        ready=True,
+                        state=state,
+                    )
+
+                action_result = _parse_json_response(
+                    await _post({"action": "resolve_pending_epochs"})
+                )
+                last_action_result = action_result
+                if action_result.get("status") == "error":
+                    return _json_response(
+                        "error",
+                        error=action_result.get(
+                            "error", "Profile initialization action failed"
+                        ),
+                        action_result=action_result,
+                        last_state=state,
+                    )
+
+                await anyio.sleep(0.1)
+
+        return _json_response(
+            "error",
+            error="Profile initialization exceeded its iteration limit",
+            last_state=last_state,
+            last_action_result=last_action_result,
+        )
+    except TimeoutError:
+        return _json_response(
+            "error",
+            error="Timed out waiting for profile initialization to complete",
+            timeout_seconds=PROFILE_INITIALIZATION_TIMEOUT_SECONDS,
+            last_state=last_state,
+            last_action_result=last_action_result,
+        )
+    except httpx.HTTPError as e:
+        exception_type, detail = _exception_context(e)
+        return _json_response(
+            "error",
+            error=_handle_error(e).removeprefix("Error: "),
+            exception_type=exception_type,
+            detail=detail,
+        )
 
 
 @mcp.tool()

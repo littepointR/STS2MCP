@@ -6,6 +6,7 @@
 |---|---|---|
 | `get_game_state(format?)` | General | Get current game state (`markdown` or `json`) |
 | `menu_select(option, seed?)` | General | Select a visible menu/game-over option |
+| `initialize_profile()` | Profiles | Reveal pending Timeline epochs and return to a playable main menu |
 | `sl()` | Combat | Restart the current singleplayer combat from the room autosave |
 | `get_profile()` | Profiles | Get active profile progress |
 | `list_profiles()` | Profiles | List profile slots and active slot |
